@@ -7,7 +7,7 @@
   "host_permissions": [
     "https://app.dealmachine.com/*",
     "https://api.dealmachine.com/*",
-    "https://leads-scraper2.onrender.com/*"
+    "https://deal-machine-scraper.onrender.com/*"
   ],
   "background": {
     "service_worker": "background.js"

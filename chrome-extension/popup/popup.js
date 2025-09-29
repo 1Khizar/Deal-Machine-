@@ -31,7 +31,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const toastContainer = document.getElementById("toastContainer");
 
-  const API_BASE_URL = "https://leads-scraper2.onrender.com/api"; // Your backend API base URL
+  const API_BASE_URL = "https://deal-machine-scraper.onrender.com/api"; // Your backend API base URL
 
   function showToast(message, isSuccess) {
     const toast = document.createElement("div");

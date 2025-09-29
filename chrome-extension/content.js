@@ -114,7 +114,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       link.remove();
 
       // Log session to backend
-      await fetch("https://leads-scraper2.onrender.com/api/scraping", {
+      await fetch("https://deal-machine-scraper.onrender.com/api/scraping", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -127,7 +127,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } catch (err) {
       console.error("🚨 Scraper Error:", err);
       // Log failure
-      await fetch("https://leads-scraper2.onrender.com/api/scraping", {
+      await fetch("https://deal-machine-scraper.onrender.com/api/scraping", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
