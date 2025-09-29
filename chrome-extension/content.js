@@ -3,36 +3,27 @@ console.log("DealMachine Scraper Content Script Loaded.");
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action !== "executeScraperInContent") return;
+
   const jwt = request.token;
   const siteToken = localStorage.getItem("token");
+
   if (!jwt || !siteToken) {
     sendResponse({ success: false, count: 0, error: "Missing tokens" });
     return;
   }
 
-  // Fetch one page of leads
+  // Fetch one page of leads via backend proxy
   async function fetchLeadsPage(page, pageSize = 100) {
-    const payload = {
-      token: siteToken,
-      sort_by: "date_created_desc",
-      limit: pageSize,
-      begin: (page - 1) * pageSize,
-      search: "",
-      search_type: "address",
-      filters: null,
-      old_filters: null,
-      list_id: "all_leads",
-      list_history_id: null,
-      get_updated_data: false,
-      property_flags: "",
-      property_flags_and_or: "or",
-    };
-    const res = await fetch("https://api.dealmachine.com/v2/leads/", {
+    const res = await fetch("https://deal-machine-scraper.onrender.com/api/leads", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${jwt}`,
+      },
+      body: JSON.stringify({ token: siteToken, page, pageSize }),
     });
-    if (!res.ok) throw new Error(`List API error ${res.status}`);
+
+    if (!res.ok) throw new Error(`Backend API error ${res.status}`);
     return res.json();
   }
 
@@ -45,15 +36,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       // CSV header
       const rows = [
-        [
-          "Street",
-          "City",
-          "State",
-          "Zip",
-          "PhoneNumber",
-          "FirstName",
-          "LastName",
-        ],
+        ["Street", "City", "State", "Zip", "PhoneNumber", "FirstName", "LastName"],
       ];
 
       while (true) {
@@ -69,7 +52,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           const zip = p.property_address_zip || "";
 
           for (const ph of p.phone_numbers || []) {
-            // Only wireless *and* carrier contains "Wireless"
             const carrier = (ph.carrier || "").toLowerCase();
             if (ph.type === "W" && carrier.includes("wireless")) {
               const c = ph.contact || {};
@@ -78,33 +60,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 if (num && !seen.has(num)) {
                   seen.add(num);
                   total++;
-                  rows.push([
-                    street,
-                    city,
-                    state,
-                    zip,
-                    num,
-                    c.given_name || "",
-                    c.surname || "",
-                  ]);
+                  rows.push([street, city, state, zip, num, c.given_name || "", c.surname || ""]);
                 }
               }
             }
           }
         }
 
-        if (props.length < pageSize) break; // last page
+        if (props.length < pageSize) break;
         page++;
       }
 
       console.log(`🎉 Done — unique wireless = ${total}`);
 
-      // Build CSV text
-      const csvText = rows
-        .map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(","))
-        .join("\r\n");
-
-      // Trigger CSV download
+      // Build CSV
+      const csvText = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\r\n");
       const blob = new Blob([csvText], { type: "text/csv;charset=utf-8;" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
@@ -114,7 +84,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       link.remove();
 
       // Log session to backend
-      await fetch("https://deal-machine-scraper.onrender.com/api/scraping", {
+      await fetch("https://deal-machine-scraper.onrender.com/api/scraping/log", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -124,10 +94,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
 
       sendResponse({ success: true, count: total });
+
     } catch (err) {
       console.error("🚨 Scraper Error:", err);
-      // Log failure
-      await fetch("https://deal-machine-scraper.onrender.com/api/scraping", {
+
+      await fetch("https://deal-machine-scraper.onrender.com/api/scraping/log", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -135,9 +106,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         },
         body: JSON.stringify({ dataCount: 0, status: "failed" }),
       });
+
       sendResponse({ success: false, count: 0, error: err.message });
     }
   })();
 
-  return true; // keep the message channel open
+  return true;
 });
