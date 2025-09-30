@@ -2,28 +2,49 @@
 console.log("DealMachine Scraper Content Script Loaded.");
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action !== "executeScraperInContent") return;
+  if (request.action !== "executeScraperInContent") {
+    return;
+  }
 
   const jwt = request.token;
   const siteToken = localStorage.getItem("token");
 
   if (!jwt || !siteToken) {
-    sendResponse({ success: false, count: 0, error: "Missing tokens" });
-    return;
+    console.error("Missing tokens - JWT:", !!jwt, "Site Token:", !!siteToken);
+    sendResponse({ success: false, count: 0, error: "Missing authentication tokens" });
+    return true;
   }
 
-  // Fetch one page of leads via backend proxy
+  console.log("🚀 Starting scraper with tokens...");
+
+  // Fetch one page of leads
   async function fetchLeadsPage(page, pageSize = 100) {
-    const res = await fetch("https://deal-machine-scraper.onrender.com/api/leads", {
+    const payload = {
+      token: siteToken,
+      sort_by: "date_created_desc",
+      limit: pageSize,
+      begin: (page - 1) * pageSize,
+      search: "",
+      search_type: "address",
+      filters: null,
+      old_filters: null,
+      list_id: "all_leads",
+      list_history_id: null,
+      get_updated_data: false,
+      property_flags: "",
+      property_flags_and_or: "or",
+    };
+
+    const res = await fetch("https://api.dealmachine.com/v2/leads/", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${jwt}`,
-      },
-      body: JSON.stringify({ token: siteToken, page, pageSize }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
 
-    if (!res.ok) throw new Error(`Backend API error ${res.status}`);
+    if (!res.ok) {
+      throw new Error(`DealMachine API error ${res.status}`);
+    }
+
     return res.json();
   }
 
@@ -36,14 +57,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       // CSV header
       const rows = [
-        ["Street", "City", "State", "Zip", "PhoneNumber", "FirstName", "LastName"],
+        [
+          "Street",
+          "City",
+          "State",
+          "Zip",
+          "PhoneNumber",
+          "FirstName",
+          "LastName",
+        ],
       ];
 
+      console.log("📊 Starting to fetch leads...");
+
       while (true) {
+        console.log(`⏳ Fetching page ${page}...`);
         const json = await fetchLeadsPage(page, pageSize);
         const props = (json.results && json.results.properties) || [];
-        console.log(`⏳ Page ${page}: got ${props.length} properties`);
-        if (props.length === 0) break;
+        
+        console.log(`📄 Page ${page}: got ${props.length} properties`);
+
+        if (props.length === 0) {
+          console.log("✅ No more properties, stopping pagination");
+          break;
+        }
 
         for (const p of props) {
           const street = p.property_address || "";
@@ -51,65 +88,97 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           const state = p.property_address_state || "";
           const zip = p.property_address_zip || "";
 
-          for (const ph of p.phone_numbers || []) {
+          const phoneNumbers = p.phone_numbers || [];
+          
+          for (const ph of phoneNumbers) {
+            // Only wireless AND carrier contains "Wireless"
             const carrier = (ph.carrier || "").toLowerCase();
-            if (ph.type === "W" && carrier.includes("wireless")) {
+            const isWireless = ph.type === "W" && carrier.includes("wireless");
+
+            if (isWireless) {
               const c = ph.contact || {};
               for (const key of ["phone_1", "phone_2", "phone_3"]) {
                 const num = c[key];
                 if (num && !seen.has(num)) {
                   seen.add(num);
                   total++;
-                  rows.push([street, city, state, zip, num, c.given_name || "", c.surname || ""]);
+                  rows.push([
+                    street,
+                    city,
+                    state,
+                    zip,
+                    num,
+                    c.given_name || "",
+                    c.surname || "",
+                  ]);
                 }
               }
             }
           }
         }
 
-        if (props.length < pageSize) break;
+        if (props.length < pageSize) {
+          console.log("✅ Last page reached");
+          break;
+        }
+        
         page++;
+        
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
 
-      console.log(`🎉 Done — unique wireless = ${total}`);
+      console.log(`🎉 Scraping complete! Total unique wireless numbers: ${total}`);
 
-      // Build CSV
-      const csvText = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\r\n");
+      if (total === 0) {
+        console.warn("⚠️ No wireless numbers found");
+        sendResponse({ 
+          success: false, 
+          count: 0, 
+          error: "No wireless numbers found in your leads",
+          shouldLog: true,
+          logData: { dataCount: 0, status: "completed", jwt }
+        });
+        return;
+      }
+
+      // Build CSV text
+      const csvText = rows
+        .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
+        .join("\r\n");
+
+      // Trigger CSV download
       const blob = new Blob([csvText], { type: "text/csv;charset=utf-8;" });
       const link = document.createElement("a");
+      const timestamp = new Date().toISOString().slice(0, 10);
       link.href = URL.createObjectURL(blob);
-      link.download = `dealmachine_wireless_${total}.csv`;
+      link.download = `dealmachine_wireless_${timestamp}_${total}.csv`;
       document.body.appendChild(link);
       link.click();
       link.remove();
 
-      // Log session to backend
-      await fetch("https://deal-machine-scraper.onrender.com/api/scraping/log", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${jwt}`,
-        },
-        body: JSON.stringify({ dataCount: total, status: "completed" }),
-      });
+      console.log("💾 CSV file downloaded");
 
-      sendResponse({ success: true, count: total });
+      // Send success response with logging info
+      sendResponse({ 
+        success: true, 
+        count: total,
+        shouldLog: true,
+        logData: { dataCount: total, status: "completed", jwt }
+      });
 
     } catch (err) {
       console.error("🚨 Scraper Error:", err);
-
-      await fetch("https://deal-machine-scraper.onrender.com/api/scraping/log", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${jwt}`,
-        },
-        body: JSON.stringify({ dataCount: 0, status: "failed" }),
+      
+      sendResponse({ 
+        success: false, 
+        count: 0, 
+        error: err.message || "Unknown error occurred",
+        shouldLog: true,
+        logData: { dataCount: 0, status: "failed", jwt }
       });
-
-      sendResponse({ success: false, count: 0, error: err.message });
     }
   })();
 
-  return true;
+  return true; // keep the message channel open for async response
 });

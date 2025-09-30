@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "DealMachine Data Scraper",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "description": "Secure data scraping tool for DealMachine with authentication",
   "permissions": ["activeTab", "scripting", "storage", "tabs"],
   "host_permissions": [
     "https://app.dealmachine.com/*",
     "https://api.dealmachine.com/*",
-    "https://leads-scraper2.onrender.com/*"
+    "https://deal-machine-scraper.onrender.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -20,7 +20,8 @@
     {
       "matches": ["https://app.dealmachine.com/*"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_end",
+      "all_frames": false
     }
   ],
   "icons": {

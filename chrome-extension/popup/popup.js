@@ -31,9 +31,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const toastContainer = document.getElementById("toastContainer");
 
-  const API_BASE_URL = "https://deal-machine-scraper.onrender.com/api"; // Your backend API base URL
+  const API_BASE_URL = "https://deal-machine-scraper.onrender.com/api";
 
   function showToast(message, isSuccess) {
+    console.log(`Toast: ${message} (${isSuccess ? 'success' : 'error'})`);
     const toast = document.createElement("div");
     toast.className = `toast ${isSuccess ? "success" : "error"}`;
     toast.innerHTML = `
@@ -44,10 +45,8 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
     toastContainer.appendChild(toast);
 
-    // Add show class for animation
     setTimeout(() => toast.classList.add("show"), 10);
 
-    // Remove toast after 3 seconds
     setTimeout(() => {
       toast.classList.remove("show");
       setTimeout(() => toast.remove(), 300);
@@ -56,15 +55,37 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function setOnlineStatus(isOnline) {
     if (isOnline) {
-      statusDot.style.backgroundColor = "#00ff41"; // Cyberpunk green
+      statusDot.style.backgroundColor = "#00ff41";
       statusText.textContent = "ONLINE";
       statusIndicator.classList.add("online");
       statusIndicator.classList.remove("offline");
     } else {
-      statusDot.style.backgroundColor = "#ff0040"; // Cyberpunk red
+      statusDot.style.backgroundColor = "#ff0040";
       statusText.textContent = "OFFLINE";
       statusIndicator.classList.add("offline");
       statusIndicator.classList.remove("online");
+    }
+  }
+
+  // Log scraping session to backend
+  async function logScrapingSession(dataCount, status, jwt) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/scraping/log`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt}`,
+        },
+        body: JSON.stringify({ dataCount, status }),
+      });
+
+      if (!response.ok) {
+        console.error("Failed to log scraping session:", response.status);
+      } else {
+        console.log("✅ Scraping session logged successfully");
+      }
+    } catch (err) {
+      console.error("Error logging scraping session:", err);
     }
   }
 
@@ -87,10 +108,13 @@ document.addEventListener("DOMContentLoaded", () => {
             setOnlineStatus(true);
             return;
           }
+        } else {
+          await chrome.storage.local.remove("jwtToken");
         }
       }
     } catch (error) {
       console.error("Auth check failed:", error);
+      setOnlineStatus(false);
     }
 
     showLoginForm();
@@ -130,7 +154,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Event Listeners
   showRegisterButton.addEventListener("click", (e) => {
     e.preventDefault();
     showRegisterForm();
@@ -165,7 +188,7 @@ document.addEventListener("DOMContentLoaded", () => {
         showToast("Authentication successful!", true);
         setTimeout(() => checkAuthStatus(), 500);
       } else {
-        showToast(data.message || "Authentication failed.", false);
+        showToast(data.error || data.message || "Authentication failed.", false);
       }
     } catch (error) {
       console.error("Login error:", error);
@@ -197,11 +220,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (response.ok) {
         showToast("Registration successful! Awaiting admin approval.", true);
-        // Clear form
         registerFormElement.reset();
         setTimeout(() => showLoginForm(), 1000);
       } else {
-        showToast(data.message || "Registration failed.", false);
+        showToast(data.error || data.message || "Registration failed.", false);
       }
     } catch (error) {
       console.error("Registration error:", error);
@@ -217,41 +239,88 @@ document.addEventListener("DOMContentLoaded", () => {
     showLoginForm();
     setOnlineStatus(false);
   });
-  // … earlier code unchanged …
 
-  // popup.js
   scrapeButton.addEventListener("click", async (e) => {
     e.preventDefault();
+    console.log("Scrape button clicked");
+    
     const { jwtToken } = await chrome.storage.local.get("jwtToken");
+    console.log("JWT Token exists:", !!jwtToken);
+    
     if (!jwtToken) {
       showToast("Authentication required.", false);
       return;
     }
 
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
+    
+    console.log("Current tab URL:", tab?.url);
+
+    if (!tab || !tab.url) {
+      showToast("Cannot detect current tab.", false);
+      return;
+    }
+
     if (!tab.url.includes("app.dealmachine.com/leads")) {
       showToast("Navigate to the Leads page first.", false);
       return;
     }
 
-    chrome.tabs.sendMessage(
-      tab.id,
-      { action: "executeScraperInContent", token: jwtToken },
-      (resp) => {
-        if (chrome.runtime.lastError) {
-          showToast("Comm error. Try refreshing the page.", false);
-        } else if (resp.success) {
-          showToast(`Found ${resp.count} wireless numbers!`, true);
-        } else {
-          showToast(`Scrape failed: ${resp.error}`, false);
+    scrapeButton.disabled = true;
+    scraperStatus.textContent = "SCRAPING...";
+    scraperStatus.className = "scraper-status scraping";
+    showToast("Starting scrape...", true);
+
+    console.log("Attempting to send message to content script...");
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content.js']
+      });
+      console.log("Content script injected");
+    } catch (err) {
+      console.log("Content script injection failed (may already be loaded):", err.message);
+    }
+
+    setTimeout(() => {
+      chrome.tabs.sendMessage(
+        tab.id,
+        { action: "executeScraperInContent", token: jwtToken },
+        async (resp) => {
+          console.log("Response from content script:", resp);
+
+          scrapeButton.disabled = false;
+          scraperStatus.textContent = "READY";
+          scraperStatus.className = "scraper-status ready";
+
+          if (chrome.runtime.lastError) {
+            console.error("Chrome runtime error:", chrome.runtime.lastError);
+            showToast("Communication error. Refresh page and try again.", false);
+          } else if (resp) {
+            // Log to backend if needed
+            if (resp.shouldLog && resp.logData) {
+              await logScrapingSession(
+                resp.logData.dataCount,
+                resp.logData.status,
+                resp.logData.jwt
+              );
+            }
+
+            // Show result to user
+            if (resp.success) {
+              showToast(`Success! Found ${resp.count} wireless numbers!`, true);
+            } else {
+              showToast(`Scrape failed: ${resp.error}`, false);
+            }
+          } else {
+            showToast("Scrape failed: No response from content script", false);
+          }
         }
-      }
-    );
+      );
+    }, 500);
   });
 
-  // Initialize popup
   checkAuthStatus();
 });

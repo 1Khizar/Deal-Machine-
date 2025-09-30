@@ -1,6 +1,9 @@
 // Background service worker for DealMachine Scraper Extension
 
+console.log("DealMachine Scraper Background Service Worker loaded");
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // Handle scraping action (if needed for future use)
   if (request.action === "startScraping") {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
@@ -22,7 +25,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       chrome.tabs.sendMessage(
         tab.id,
-        { action: "executeScraper", token: request.token },
+        { action: "executeScraperInContent", token: request.token },
         (response) => {
           if (chrome.runtime.lastError) {
             console.error(
@@ -42,20 +45,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // keep message channel open for async sendResponse
   }
 
+  // Check authentication status
   if (request.action === "checkAuth") {
-    chrome.storage.local.get(["authToken"], (result) => {
+    chrome.storage.local.get(["jwtToken"], (result) => {
       sendResponse({
-        isAuthenticated: !!result.authToken,
-        token: result.authToken,
+        isAuthenticated: !!result.jwtToken,
+        token: result.jwtToken,
       });
     });
     return true;
   }
 
+  // Save authentication token
   if (request.action === "saveAuth") {
     chrome.storage.local.set(
       {
-        authToken: request.token,
+        jwtToken: request.token,
         userInfo: request.userInfo,
       },
       () => {
@@ -65,8 +70,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // Logout action
   if (request.action === "logout") {
-    chrome.storage.local.clear(() => {
+    chrome.storage.local.remove(["jwtToken", "userInfo"], () => {
       sendResponse({ success: true });
     });
     return true;
